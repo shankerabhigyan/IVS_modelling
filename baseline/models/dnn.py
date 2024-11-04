@@ -10,8 +10,11 @@ class IVDataset(Dataset):
         # Merge features with IV data on date
         self.data = iv_df.merge(features_df, on='date', how='left')
         
+        # Identify feature columns (all columns except 'date')
+        self.feature_cols = [col for col in features_df.columns if col != 'date']
+        
         # Convert to tensors
-        self.features = torch.tensor(self.data[['feature1', 'feature2', 'feature3']].values, dtype=torch.float32)
+        self.features = torch.tensor(self.data[self.feature_cols].values, dtype=torch.float32)
         self.m = torch.tensor(self.data['m'].values, dtype=torch.float32).reshape(-1, 1)
         self.tau = torch.tensor(self.data['tau'].values, dtype=torch.float32).reshape(-1, 1)
         self.iv = torch.tensor(self.data['IV'].values, dtype=torch.float32).reshape(-1, 1)
@@ -23,11 +26,15 @@ class IVDataset(Dataset):
         # Return features, m, tau as input and IV as target
         input_tensor = torch.cat([self.features[idx], self.m[idx], self.tau[idx]], dim=0)
         return input_tensor, self.iv[idx]
+    
+    def get_input_size(self):
+        # Return total input size (num_features + m + tau)
+        return len(self.feature_cols) + 2
 
 class IVSDNN(nn.Module):
-    def __init__(self, input_size, hidden_size=64):
+    def __init__(self, input_size, hidden_size=50):
         super(IVSDNN, self).__init__()
-        # Input size will be 5 (3 features + m + tau)
+        # Input size will be (num_features + m + tau)
         self.net = nn.Sequential(
             nn.Linear(input_size, hidden_size),
             nn.BatchNorm1d(hidden_size),
@@ -106,9 +113,10 @@ def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_
             # MSE loss
             loss = mse_loss(outputs, batch_targets)
             
-            # Add no-arbitrage penalties
-            m = batch_inputs[:, 3].reshape(-1, 1)  # m is the 4th column
-            tau = batch_inputs[:, 4].reshape(-1, 1)  # tau is the 5th column
+            # no-arbitrage penalties
+            # m and tau are always the last two columns
+            m = batch_inputs[:, -2].reshape(-1, 1)  # second-to-last column
+            tau = batch_inputs[:, -1].reshape(-1, 1)  # last column
             
             cal_penalty = calendar_spread_penalty(model, m, tau)
             but_penalty = butterfly_arbitrage_penalty(model, m, tau)
@@ -117,7 +125,6 @@ def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_
             total_penalty = lambda_penalty * (cal_penalty + but_penalty + large_m_penalty)
             loss += total_penalty
             
-            # Backward pass and optimization
             loss.backward()
             optimizer.step()
             
@@ -126,26 +133,50 @@ def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_
         if (epoch + 1) % 5 == 0:
             print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {total_loss/len(train_loader):.6f}')
 
-def main():
-    # Load data
-    features_df = pd.read_csv('data/processed/features_pca_iv23.csv')
-    iv_df = pd.read_csv('data/processed/predicted_iv23.csv')
+def main(features_path='data/processed/features_pca_iv23.csv', 
+         iv_path='data/processed/predicted_iv23.csv',
+         batch_size=1024,
+         num_epochs=20,
+         learning_rate=0.001,
+         hidden_size=50,
+         lambda_penalty=1.0):
+    """
+    Main function with configurable parameters
     
-    # Create dataset
+    Args:
+        features_path (str): Path to features CSV file
+        iv_path (str): Path to implied volatility CSV file
+        batch_size (int): Batch size for training
+        num_epochs (int): Number of training epochs
+        learning_rate (float): Learning rate for optimizer
+        hidden_size (int): Number of neurons in hidden layers
+        lambda_penalty (float): Weight for no-arbitrage penalties
+    """
+    features_df = pd.read_csv(features_path)
+    iv_df = pd.read_csv(iv_path)
+    
     dataset = IVDataset(features_df, iv_df)
     
-    # Create data loader
-    batch_size = 32
     train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     
-    # Initialize model
-    input_size = 5  # 3 features + m + tau
-    model = IVSDNN(input_size)
-    
-    # Train model
-    train_model(model, train_loader)
-    
+    input_size = dataset.get_input_size()
+    model = IVSDNN(input_size, hidden_size)
+    print(f"Model initialized with {input_size} inputs ({input_size-2} features + m + tau)")
+    print(f"Hidden layer size: {hidden_size}")
+    train_model(model, train_loader, num_epochs, learning_rate, lambda_penalty)
     return model
 
 if __name__ == "__main__":
     model = main()
+    
+    """
+    model = main(
+        features_path='path/to/features.csv',
+        iv_path='path/to/iv.csv',
+        batch_size=512,
+        num_epochs=30,
+        learning_rate=0.0005,
+        hidden_size=100,
+        lambda_penalty=0.5
+    )
+    """
