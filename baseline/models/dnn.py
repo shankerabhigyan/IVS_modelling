@@ -1,12 +1,33 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import pandas as pd
 import numpy as np
+from torch.utils.data import Dataset, DataLoader
+
+class IVDataset(Dataset):
+    def __init__(self, features_df, iv_df):
+        # Merge features with IV data on date
+        self.data = iv_df.merge(features_df, on='date', how='left')
+        
+        # Convert to tensors
+        self.features = torch.tensor(self.data[['feature1', 'feature2', 'feature3']].values, dtype=torch.float32)
+        self.m = torch.tensor(self.data['m'].values, dtype=torch.float32).reshape(-1, 1)
+        self.tau = torch.tensor(self.data['tau'].values, dtype=torch.float32).reshape(-1, 1)
+        self.iv = torch.tensor(self.data['IV'].values, dtype=torch.float32).reshape(-1, 1)
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        # Return features, m, tau as input and IV as target
+        input_tensor = torch.cat([self.features[idx], self.m[idx], self.tau[idx]], dim=0)
+        return input_tensor, self.iv[idx]
 
 class IVSDNN(nn.Module):
-    def __init__(self, input_size, hidden_size=50):
+    def __init__(self, input_size, hidden_size=64):
         super(IVSDNN, self).__init__()
-        # three hidden layers with 50 neurons each as specified in paper
+        # Input size will be 5 (3 features + m + tau)
         self.net = nn.Sequential(
             nn.Linear(input_size, hidden_size),
             nn.BatchNorm1d(hidden_size),
@@ -30,20 +51,6 @@ class IVSDNN(nn.Module):
 
     def forward(self, x):
         return self.net(x)
-
-def create_synthetic_grids():
-    """synthetic grids to check no-arbitrage conditions"""
-    m_min, m_max = np.log(0.6), np.log(2)
-    tau_max = 730/365
-
-    # Grid for calendar spread and butterfly arbitrage (IC34)
-    m_grid_c34 = np.power(np.linspace(-((-2*m_min)**(1/3)), (2*m_max)**(1/3), 40), 3)
-    tau_grid = np.exp(np.linspace(np.log(1/365), np.log(tau_max + 1), 40))
-    
-    # Grid for large moneyness behavior (IC5)
-    m_grid_c5 = np.array([6*m_min, 4*m_min, 4*m_max, 6*m_max])
-    
-    return m_grid_c34, tau_grid, m_grid_c5
 
 def calendar_spread_penalty(sigma, m, tau, delta_tau=1e-5):
     """Calculate calendar spread arbitrage penalty"""
@@ -84,81 +91,61 @@ def large_moneyness_penalty(sigma, m, tau):
     
     return torch.abs(sigma_mid * d2_sigma_dm2 + d_sigma_dm**2).mean()
 
-class IVSTrainer:
-    def __init__(self, model, learning_rate=0.001, lambda_penalty=1.0):
-        self.model = model
-        self.optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-        self.lambda_penalty = lambda_penalty
-        
-        # Create synthetic grids for no-arbitrage checks
-        self.m_grid_c34, self.tau_grid, self.m_grid_c5 = create_synthetic_grids()
-        
-    def train_step(self, batch_data):
-        """Single training step"""
-        self.model.train()
-        self.optimizer.zero_grad()
-        
-        # Unpack batch data
-        inputs, targets = batch_data
-        
-        # Forward pass
-        outputs = self.model(inputs)
-        
-        # MSE loss
-        mse_loss = nn.MSELoss()(outputs, targets)
-        
-        # Calculate no-arbitrage penalties
-        cal_penalty = calendar_spread_penalty(self.model, self.m_grid_c34, self.tau_grid)
-        but_penalty = butterfly_arbitrage_penalty(self.model, self.m_grid_c34, self.tau_grid)
-        large_m_penalty = large_moneyness_penalty(self.model, self.m_grid_c5, self.tau_grid)
-        
-        # Total loss
-        total_loss = mse_loss + self.lambda_penalty * (cal_penalty + but_penalty + large_m_penalty)
-        
-        # Backward pass and optimization
-        total_loss.backward()
-        self.optimizer.step()
-        
-        return {
-            'total_loss': total_loss.item(),
-            'mse_loss': mse_loss.item(),
-            'calendar_penalty': cal_penalty.item(),
-            'butterfly_penalty': but_penalty.item(),
-            'large_m_penalty': large_m_penalty.item()
-        }
-
-    def train_epoch(self, train_loader):
-        """Train for one epoch"""
-        epoch_losses = []
-        for batch_data in train_loader:
-            step_losses = self.train_step(batch_data)
-            epoch_losses.append(step_losses)
+def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_penalty=1.0):
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    mse_loss = nn.MSELoss()
+    
+    for epoch in range(num_epochs):
+        total_loss = 0
+        for batch_inputs, batch_targets in train_loader:
+            optimizer.zero_grad()
             
-        # Average losses over the epoch
-        avg_losses = {k: np.mean([d[k] for d in epoch_losses]) for k in epoch_losses[0].keys()}
-        return avg_losses
+            # Forward pass
+            outputs = model(batch_inputs)
+            
+            # MSE loss
+            loss = mse_loss(outputs, batch_targets)
+            
+            # Add no-arbitrage penalties
+            m = batch_inputs[:, 3].reshape(-1, 1)  # m is the 4th column
+            tau = batch_inputs[:, 4].reshape(-1, 1)  # tau is the 5th column
+            
+            cal_penalty = calendar_spread_penalty(model, m, tau)
+            but_penalty = butterfly_arbitrage_penalty(model, m, tau)
+            large_m_penalty = large_moneyness_penalty(model, m, tau)
+            
+            total_penalty = lambda_penalty * (cal_penalty + but_penalty + large_m_penalty)
+            loss += total_penalty
+            
+            # Backward pass and optimization
+            loss.backward()
+            optimizer.step()
+            
+            total_loss += loss.item()
+        
+        if (epoch + 1) % 5 == 0:
+            print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {total_loss/len(train_loader):.6f}')
 
-# Example usage:
-def prepare_data(F_t, m, tau):
-    """Prepare input data for the DNN"""
-    # Concatenate F_t (implied vols at sample points) with m and tau
-    inputs = torch.cat([F_t, m.unsqueeze(1), tau.unsqueeze(1)], dim=1)
-    return inputs
+def main():
+    # Load data
+    features_df = pd.read_csv('data/processed/features_pca_iv23.csv')
+    iv_df = pd.read_csv('data/processed/predicted_iv23.csv')
+    
+    # Create dataset
+    dataset = IVDataset(features_df, iv_df)
+    
+    # Create data loader
+    batch_size = 32
+    train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    
+    # Initialize model
+    input_size = 5  # 3 features + m + tau
+    model = IVSDNN(input_size)
+    
+    # Train model
+    train_model(model, train_loader)
+    
+    return model
 
-# Create and train the model
-input_size = 156  # 154 (F_t) + 2 (m, tau)
-model = IVSDNN(input_size)
-trainer = IVSTrainer(model)
-
-# Training loop would look like:
-"""
-num_epochs = 20
-for epoch in range(num_epochs):
-    losses = trainer.train_epoch(train_loader)
-    print(f"Epoch {epoch+1}/{num_epochs}")
-    print(f"Total Loss: {losses['total_loss']:.6f}")
-    print(f"MSE Loss: {losses['mse_loss']:.6f}")
-    print(f"Calendar Penalty: {losses['calendar_penalty']:.6f}")
-    print(f"Butterfly Penalty: {losses['butterfly_penalty']:.6f}")
-    print(f"Large M Penalty: {losses['large_m_penalty']:.6f}")
-"""
+if __name__ == "__main__":
+    model = main()
