@@ -128,9 +128,11 @@ class IVSFeatureExtractor:
         pivot_df = df.pivot(index='date', columns=['tau', 'm'], values='IV')
         
         scaled_data = self.scaler.fit_transform(pivot_df)
+        # print(f"sample scaled data: {scaled_data[0]}")
+        # print(f"scaled data shape: {scaled_data.shape}")
         return scaled_data
     
-    def train(self, train_data, batch_size=128, n_epochs=200):
+    def train(self, train_data, val_df, batch_size=128, n_epochs=200):
         """Train the VAE model"""
         self.input_dim = train_data.shape[1]
         self.model = VAE(self.input_dim, self.hidden_dim, self.latent_dim)
@@ -178,6 +180,33 @@ class IVSFeatureExtractor:
                     'reconstruction_loss': avg_recon,
                     'kl_loss': avg_kl
                 })
+
+            if (epoch + 1) % 1000 == 0:
+                print("\nValidating...")
+                self.validate(val_df)
+                print("\n")
+
+    def validate(self, val_df):
+        self.model.eval()
+        processed_data = self.prepare_data(val_df)
+        dataset = IVSDataset(processed_data, self.device)
+
+        loader = DataLoader(dataset, batch_size=len(dataset))
+
+        with torch.no_grad():
+            batch = next(iter(loader))
+            recon_batch, mu, log_var = self.model(batch)
+            loss, recon_loss, kl_loss = loss_function(
+                recon_batch, batch, mu, log_var, self.beta
+            )
+            print(f"Validation Loss = {loss:.4f} || Reconstruction Loss = {recon_loss:.4f} || KL_loss = {kl_loss:.4f}")
+
+            wandb.log({
+                'val_loss': loss,
+                'val_reconstruction_loss': recon_loss,
+                'val_kl_loss': kl_loss
+            })
+
     
     def extract_features(self, data):
         """
@@ -228,8 +257,8 @@ if __name__=="__main__":
 
     # Initialize feature extractor
     extractor = IVSFeatureExtractor(
-        hidden_dim=128,
-        latent_dim=10,
+        hidden_dim=4096,
+        latent_dim=64,
         beta=1.0,
         learning_rate=0.001
     )
@@ -238,7 +267,7 @@ if __name__=="__main__":
     processed_data = extractor.prepare_data(df)
 
     # Train the model
-    extractor.train(processed_data, batch_size=16, n_epochs=10000)
+    extractor.train(processed_data, val_df, batch_size=8, n_epochs=25000)
 
     # Extract features
     features = extractor.extract_features(processed_data)
