@@ -238,11 +238,19 @@ def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_
                 f'Calendar Penalty = {avg_cal_penalty:.6f} || '
                 f'Butterfly Penalty = {avg_but_penalty:.6f} || '
                 f'Large Moneyness Penalty = {avg_large_m_penalty:.6f}')
+        wandb.log({
+            'epoch': epoch,
+            'loss': avg_loss,
+            'penalty': avg_penalty,
+            'calendar_penalty': avg_cal_penalty,
+            'butterfly_penalty': avg_but_penalty,
+            'large_moneyness_penalty': avg_large_m_penalty
+        })
 
 def main(features_path='../../data/processed/features_pca_iv23.csv', 
          iv_path='../../data/processed/predicted_iv23.csv',
          batch_size=512,
-         num_epochs=80,
+         num_epochs=100,
          learning_rate=0.001,
          hidden_size=256,
          lambda_penalty=1):  
@@ -265,4 +273,6 @@ def main(features_path='../../data/processed/features_pca_iv23.csv',
     return model
 
 if __name__ == "__main__":
+    import wandb
+    wandb.init(project="ivs-dnn")
     model = main()
