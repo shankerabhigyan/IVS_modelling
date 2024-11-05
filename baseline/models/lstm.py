@@ -117,17 +117,17 @@ class DatasetManager:
         # dataset is sorted by date
         # we pick a day's feature as target and use MA of previous one, five and twenty-two days as features
         # we create a torch dataset with these pairs
-        # feature_0 , feature_1, feature_2 are the columns indexed by date
+        # feature1 , feature2, feature3 are the columns indexed by date
         features = []
         targets = []
         for i in range(22, len(self.df)):
-            # target tensor (feature_0, feature_1, feature_2)
-            target = torch.tensor(self.df.iloc[i][['feature_0', 'feature_1', 'feature_2']].astype(float).values, dtype=torch.float32)
+            # target tensor (feature1, feature2, feature3)
+            target = torch.tensor(self.df.iloc[i][['feature1', 'feature2', 'feature3']].astype(float).values, dtype=torch.float32)
             targets.append(target)
             # feature tensor (ma1, ma5, ma22)
-            ma1 = torch.tensor(self.df.iloc[i-1][['feature_0', 'feature_1', 'feature_2']].astype(float).values, dtype=torch.float32)
-            ma5 = torch.tensor(self.df.iloc[i-5:i][['feature_0', 'feature_1', 'feature_2']].mean().astype(float).values, dtype=torch.float32)
-            ma22 = torch.tensor(self.df.iloc[i-22:i][['feature_0', 'feature_1', 'feature_2']].mean().astype(float).values, dtype=torch.float32)
+            ma1 = torch.tensor(self.df.iloc[i-1][['feature1', 'feature2', 'feature3']].astype(float).values, dtype=torch.float32)
+            ma5 = torch.tensor(self.df.iloc[i-5:i][['feature1', 'feature2', 'feature3']].mean().astype(float).values, dtype=torch.float32)
+            ma22 = torch.tensor(self.df.iloc[i-22:i][['feature1', 'feature2', 'feature3']].mean().astype(float).values, dtype=torch.float32)
             feature = torch.cat((ma1, ma5, ma22))
             features.append(feature)
         return torch.stack(features), torch.stack(targets)
@@ -136,7 +136,7 @@ class DatasetManager:
 if __name__ == '__main__':
     print("Testing Script...")
     # Load the dataset
-    dataset = DatasetManager('../../data/processed/features_iv23.csv')
+    dataset = DatasetManager('../../data/processed/features_pca_iv23.csv')
     features, targets = dataset.make_train_target_pairs()
     print('Features shape:', features.shape)
     print('Targets shape:', targets.shape)
@@ -148,9 +148,9 @@ if __name__ == '__main__':
 
     # Initialize the model
     print('Initializing model...')
-    model_path = 'baseline/models/experiments/test_lstm1.pth'
-    model = ModelManager(input_dim=9, hidden_dim=100, output_dim=3, model_path=model_path)
-    model.train(train_features, train_targets, epochs=100)
+    model_path = './experiments/test_lstm1.pth'
+    model = ModelManager(input_dim=9, hidden_dim=512, output_dim=3, model_path=model_path)
+    model.train(train_features, train_targets, epochs=600)
 
     val_loader = DataLoader(TensorDataset(val_features, val_targets), batch_size=1, shuffle=False)
     model.validate(val_loader)
