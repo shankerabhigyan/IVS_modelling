@@ -90,7 +90,7 @@ class BiLSTMModelManager:
         self.criterion = nn.MSELoss()
         self.optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
         self.model_path = model_path
-        self.wandb = wandb.init(project='IVS_BiLSTM')
+        self.wandb = wandb.init(project='IVS_LSTM')
 
     def train(self, train_data, train_targets, batch_size=128, epochs=10, val_data=None, val_labels=None):
         train_dataset = TensorDataset(train_data, train_targets)
