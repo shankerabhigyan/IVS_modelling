@@ -5,6 +5,7 @@ from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import wandb
 
 class CustomLSTMCell(nn.Module):
     def __init__(self, input_dim, hidden_dim):
@@ -51,6 +52,17 @@ class CustomLSTMModel(nn.Module):
         output = self.dense(h)
         return output
     
+    def load_model(self, model_path):
+        self.load_state_dict(torch.load(model_path))
+        print(f'Model loaded from {model_path}')
+
+    def predict(self, inputs):
+        self.eval()
+        with torch.no_grad():
+            inputs = inputs.unsqueeze(0)
+            output = self(inputs)
+        return output
+    
 class ModelManager:
     def __init__(self, input_dim, hidden_dim, output_dim, learning_rate=0.001, model_path='model.pth'):
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -58,8 +70,9 @@ class ModelManager:
         self.criterion = nn.MSELoss()
         self.optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
         self.model_path = model_path
+        self.wandb = wandb.init(project='IVS_LSTM')
 
-    def train(self, train_data, train_targets, batch_size=32, epochs=10, val_data=None, val_labels=None):
+    def train(self, train_data, train_targets, batch_size=128, epochs=10, val_data=None, val_labels=None):
         train_dataset = TensorDataset(train_data, train_targets)
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
@@ -74,17 +87,23 @@ class ModelManager:
         self.model.train()  # Set the model to training mode
         for epoch in range(epochs):
             running_loss = 0.0
+            running_mape = 0.0
             for inputs, labels in train_loader:
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
                 self.optimizer.zero_grad()  # Zero the parameter gradients
                 outputs = self.model(inputs)
                 loss = self.criterion(outputs, labels)
+                mape = torch.mean(torch.abs((labels - outputs) / labels)) * 100
                 loss.backward()  # Backpropagation
                 self.optimizer.step()  # Optimize
                 running_loss += loss.item()
+                running_mape += mape.item()
 
-            print(f'Epoch {epoch+1} Loss: {running_loss / len(train_loader)}')
-
+            print(f'Epoch {epoch+1} Loss: {running_loss / len(train_loader)} MAPE: {running_mape / len(train_loader)}')
+            self.wandb.log({
+                'train_loss': running_loss / len(train_loader),
+                'train_mape': running_mape / len(train_loader)
+            })
             if validate:
                 self.validate(val_loader)
 
@@ -142,9 +161,12 @@ if __name__ == '__main__':
     print('Targets shape:', targets.shape)
 
     # Split the dataset into training and validation sets
-    split = int(0.8 * len(features))
-    train_features, val_features = features[:split], features[split:]
-    train_targets, val_targets = targets[:split], targets[split:]
+    # split = int(0.8 * len(features))
+    # train_features, val_features = features[:split], features[split:]
+    # train_targets, val_targets = targets[:split], targets[split:]
+
+    # no split
+    train_features, train_targets = features, targets
 
     # Initialize the model
     print('Initializing model...')
@@ -152,7 +174,7 @@ if __name__ == '__main__':
     model = ModelManager(input_dim=9, hidden_dim=512, output_dim=3, model_path=model_path)
     model.train(train_features, train_targets, epochs=600)
 
-    val_loader = DataLoader(TensorDataset(val_features, val_targets), batch_size=1, shuffle=False)
-    model.validate(val_loader)
+    #val_loader = DataLoader(TensorDataset(val_features, val_targets), batch_size=1, shuffle=False)
+    #model.validate(val_loader)
 
     model.save_model()

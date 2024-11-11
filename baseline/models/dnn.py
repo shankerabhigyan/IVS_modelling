@@ -6,54 +6,8 @@ import numpy as np
 from torch.utils.data import Dataset, DataLoader
 
 class IVDataset(Dataset):
-    def __init__(self, features_df, iv_df):
-        # Convert dates to datetime
-        features_df['date'] = pd.to_datetime(features_df['date'])
-        iv_df['date'] = pd.to_datetime(iv_df['date'])
-        
-        # Get unique dates
-        feature_dates = set(features_df['date'])
-        iv_dates = set(iv_df['date'])
-        common_dates = sorted(list(feature_dates.intersection(iv_dates)))
-        
-        print(f"\nDate ranges:")
-        print(f"Features: {min(feature_dates)} to {max(feature_dates)}")
-        print(f"IV data: {min(iv_dates)} to {max(iv_dates)}")
-        print(f"Common dates: {len(common_dates)}")
-        
-        # Create clean dataframes
-        data_list = []
-        feature_cols = [col for col in features_df.columns if col != 'date']
-        
-        for date in common_dates:
-            # Get features for this date
-            feat_row = features_df[features_df['date'] == date][feature_cols].iloc[0]
-            
-            # Get all IV points for this date
-            iv_rows = iv_df[iv_df['date'] == date]
-            
-            # Create rows with features repeated for each IV point
-            for _, iv_row in iv_rows.iterrows():
-                row_data = {
-                    'date': date,
-                    'm': iv_row['m'],
-                    'tau': iv_row['tau'],
-                    'IV': iv_row['IV']
-                }
-                # Add features
-                for col in feature_cols:
-                    row_data[col] = feat_row[col]
-                
-                data_list.append(row_data)
-        
-        # Create final dataframe
-        self.data = pd.DataFrame(data_list)
-        
-        print("\nDataset creation complete:")
-        print(f"Total rows: {len(self.data)}")
-        print("\nFeature stats:")
-        print(self.data[feature_cols].describe())
-        
+    def __init__(self, df, feature_cols):
+        self.data = df          
         # Convert to tensors
         self.feature_cols = feature_cols
         self.features = torch.tensor(self.data[feature_cols].values, dtype=torch.float32)
@@ -173,7 +127,7 @@ def large_moneyness_penalty(model, features, m, tau, delta_m=1e-5):
     penalty = torch.clamp(penalty, min=0, max=100)
     return penalty.mean()
 
-def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_penalty=1.0):
+def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_penalty=1.0, wandb=None):
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-5)  # Added weight decay
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2, verbose=True)
     mse_loss = nn.MSELoss()
