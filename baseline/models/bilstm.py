@@ -82,6 +82,13 @@ class CustomBiLSTMModel(nn.Module):
         combined_states = torch.cat((forward_states[-1], backward_states[-1]), dim=1)
         output = self.dense(combined_states)
         return output
+    
+    def predict(self, inputs):
+        self.eval()
+        with torch.no_grad():
+            inputs = inputs.unsqueeze(0)
+            output = self(inputs)
+        return output
 
 class BiLSTMModelManager:
     def __init__(self, input_dim, hidden_dim, output_dim, learning_rate=0.001, model_path='bilstm_model.pth'):
