@@ -6,6 +6,8 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from sklearn.preprocessing import StandardScaler
 
+import wandb
+
 # class IVSDataset(Dataset):
 #     """Custom dataset for implied volatility surface data"""
 #     def __init__(self, data):
@@ -91,8 +93,10 @@ def loss_function(recon_x, x, mu, log_var, beta=1.0):
     
     # Total loss
     total_loss = recon_loss + beta * kl_loss
+
+    mape = torch.mean(torch.abs((x - recon_x) / x))
     
-    return total_loss, recon_loss, kl_loss
+    return total_loss, recon_loss, kl_loss, mape
 
 class IVSDataset(Dataset):
     def __init__(self, data, device):
@@ -116,6 +120,7 @@ class IVSFeatureExtractor:
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"Using device: {self.device}")
         
+        
     def prepare_data(self, df):
         """
         Prepare data by pivoting and standardizing
@@ -134,6 +139,7 @@ class IVSFeatureExtractor:
     
     def train(self, train_data, val_df, batch_size=128, n_epochs=200):
         """Train the VAE model"""
+        self.wandb = wandb.init(project='ivs-vae')
         self.input_dim = train_data.shape[1]
         self.model = VAE(self.input_dim, self.hidden_dim, self.latent_dim)
         self.model.to(self.device)
@@ -149,6 +155,7 @@ class IVSFeatureExtractor:
             total_epoch_loss = 0
             total_recon_loss = 0
             total_kl_loss = 0
+            total_mape = 0
             num_batches = 0
             
             for batch in train_loader:
@@ -156,7 +163,7 @@ class IVSFeatureExtractor:
                 
                 recon_batch, mu, log_var = self.model(batch)
                 
-                loss, recon_loss, kl_loss = loss_function(
+                loss, recon_loss, kl_loss, mape = loss_function(
                     recon_batch, batch, mu, log_var, self.beta
                 )
                 
@@ -166,22 +173,25 @@ class IVSFeatureExtractor:
                 total_epoch_loss += loss.item()
                 total_recon_loss += recon_loss.item()
                 total_kl_loss += kl_loss.item()
+                total_mape += mape.item()
                 num_batches += 1
             
             avg_loss = total_epoch_loss / num_batches
             avg_recon = total_recon_loss / num_batches
             avg_kl = total_kl_loss / num_batches
+            avg_mape = total_mape / num_batches
             
-            if (epoch + 1) % 100 == 0:
-                print(f"Epoch {epoch + 1} || Loss = {avg_loss:.4f} || Reconstruction Loss = {avg_recon:.4f} || KL_loss = {avg_kl:.4f}")
+            if (epoch + 1) % 10 == 0:
+                print(f"Epoch {epoch + 1} || Loss = {avg_loss:.4f} || Reconstruction Loss = {avg_recon:.4f} || KL_loss = {avg_kl:.4f} || MAPE = {avg_mape:.4f}")
                 
-                wandb.log({
+                self.wandb.log({
                     'total_loss': avg_loss,
                     'reconstruction_loss': avg_recon,
-                    'kl_loss': avg_kl
+                    'kl_loss': avg_kl,
+                    'mape': avg_mape
                 })
 
-            if (epoch + 1) % 1000 == 0:
+            if (epoch + 1) % 100 == 0:
                 print("\nValidating...")
                 self.validate(val_df)
                 print("\n")
@@ -196,15 +206,16 @@ class IVSFeatureExtractor:
         with torch.no_grad():
             batch = next(iter(loader))
             recon_batch, mu, log_var = self.model(batch)
-            loss, recon_loss, kl_loss = loss_function(
+            loss, recon_loss, kl_loss, mape = loss_function(
                 recon_batch, batch, mu, log_var, self.beta
             )
-            print(f"Validation Loss = {loss:.4f} || Reconstruction Loss = {recon_loss:.4f} || KL_loss = {kl_loss:.4f}")
+            print(f"Validation Loss = {loss:.4f} || Reconstruction Loss = {recon_loss:.4f} || KL_loss = {kl_loss:.4f} || MAPE = {mape:.4f}")
 
-            wandb.log({
+            self.wandb.log({
                 'val_loss': loss,
                 'val_reconstruction_loss': recon_loss,
-                'val_kl_loss': kl_loss
+                'val_kl_loss': kl_loss,
+                'val_mape': mape
             })
 
     
@@ -251,9 +262,6 @@ if __name__=="__main__":
     df = pd.read_csv('../../data/processed/predicted_iv23.csv')
 
     val_df = pd.read_csv('../../data/processed/predicted_iv22.csv')
-
-    import wandb
-    wandb.init(project='ivs-feature-extraction')
 
     # Initialize feature extractor
     extractor = IVSFeatureExtractor(

@@ -132,24 +132,38 @@ class DatasetManager:
         self.df = pd.read_csv(csv_path)
         self.ma_list = ma_list
     
-    def make_train_target_pairs(self):
+    def make_train_target_pairs(self, feature_cols=None):
         # dataset is sorted by date
         # we pick a day's feature as target and use MA of previous one, five and twenty-two days as features
         # we create a torch dataset with these pairs
         # feature1 , feature2, feature3 are the columns indexed by date
         features = []
         targets = []
-        for i in range(22, len(self.df)):
-            # target tensor (feature1, feature2, feature3)
-            target = torch.tensor(self.df.iloc[i][['feature1', 'feature2', 'feature3']].astype(float).values, dtype=torch.float32)
-            targets.append(target)
-            # feature tensor (ma1, ma5, ma22)
-            ma1 = torch.tensor(self.df.iloc[i-1][['feature1', 'feature2', 'feature3']].astype(float).values, dtype=torch.float32)
-            ma5 = torch.tensor(self.df.iloc[i-5:i][['feature1', 'feature2', 'feature3']].mean().astype(float).values, dtype=torch.float32)
-            ma22 = torch.tensor(self.df.iloc[i-22:i][['feature1', 'feature2', 'feature3']].mean().astype(float).values, dtype=torch.float32)
-            feature = torch.cat((ma1, ma5, ma22))
-            features.append(feature)
-        return torch.stack(features), torch.stack(targets)
+        if feature_cols is None:
+            for i in range(22, len(self.df)):
+                # target tensor (feature1, feature2, feature3)
+                target = torch.tensor(self.df.iloc[i][['feature1', 'feature2', 'feature3']].astype(float).values, dtype=torch.float32)
+                targets.append(target)
+                # feature tensor (ma1, ma5, ma22)
+                ma1 = torch.tensor(self.df.iloc[i-1][['feature1', 'feature2', 'feature3']].astype(float).values, dtype=torch.float32)
+                ma5 = torch.tensor(self.df.iloc[i-5:i][['feature1', 'feature2', 'feature3']].mean().astype(float).values, dtype=torch.float32)
+                ma22 = torch.tensor(self.df.iloc[i-22:i][['feature1', 'feature2', 'feature3']].mean().astype(float).values, dtype=torch.float32)
+                feature = torch.cat((ma1, ma5, ma22))
+                features.append(feature)
+            return torch.stack(features), torch.stack(targets)
+        
+        else:
+            for i in range(22, len(self.df)):
+                # target tensor (feature1, feature2, feature3)
+                target = torch.tensor(self.df.iloc[i][feature_cols].astype(float).values, dtype=torch.float32)
+                targets.append(target)
+                # feature tensor (ma1, ma5, ma22)
+                ma1 = torch.tensor(self.df.iloc[i-1][feature_cols].astype(float).values, dtype=torch.float32)
+                ma5 = torch.tensor(self.df.iloc[i-5:i][feature_cols].mean().astype(float).values, dtype=torch.float32)
+                ma22 = torch.tensor(self.df.iloc[i-22:i][feature_cols].mean().astype(float).values, dtype=torch.float32)
+                feature = torch.cat((ma1, ma5, ma22))
+                features.append(feature)
+            return torch.stack(features), torch.stack(targets)
 
        
 if __name__ == '__main__':
