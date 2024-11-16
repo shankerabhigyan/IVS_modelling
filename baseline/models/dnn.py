@@ -4,6 +4,7 @@ import torch.optim as optim
 import pandas as pd
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
+from tqdm import tqdm
 
 class IVDataset(Dataset):
     def __init__(self, df, feature_cols):
