@@ -64,13 +64,13 @@ class CustomLSTMModel(nn.Module):
         return output
     
 class ModelManager:
-    def __init__(self, input_dim, hidden_dim, output_dim, learning_rate=0.001, model_path='model.pth'):
+    def __init__(self, input_dim, hidden_dim, output_dim, learning_rate=0.001, model_path='model.pth', project='IVS_LSTM'):
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.model = CustomLSTMModel(input_dim, hidden_dim, output_dim).to(self.device)
         self.criterion = nn.MSELoss()
         self.optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
         self.model_path = model_path
-        self.wandb = wandb.init(project='IVS_LSTM')
+        self.wandb = wandb.init(project=project)
 
     def train(self, train_data, train_targets, batch_size=128, epochs=10, val_data=None, val_labels=None):
         train_dataset = TensorDataset(train_data, train_targets)

@@ -127,6 +127,14 @@ def large_moneyness_penalty(model, features, m, tau, delta_m=1e-5):
     penalty = torch.clamp(penalty, min=0, max=100)
     return penalty.mean()
 
+def calculate_mape(targets, outputs):
+    epsilon = 1e-10
+    # Clip the ratio to prevent extreme values
+    percentage_errors = torch.abs((targets - outputs) / (torch.abs(targets) + epsilon)) * 100
+    # Optional: clip to reasonable range, e.g., [0, 1000]
+    percentage_errors = torch.clip(percentage_errors, 0, 1000)
+    return torch.mean(percentage_errors)
+
 def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_penalty=1.0, wandb=None):
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-5)  # Added weight decay
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2, verbose=True)
@@ -138,6 +146,7 @@ def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_
         total_cal_penalty = 0
         total_but_penalty = 0
         total_large_m_penalty = 0
+        total_mape = 0
         num_batches = 0
         
         model.train()
@@ -148,6 +157,7 @@ def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_
             outputs = model(batch_inputs)
 
             mse = mse_loss(outputs, batch_targets)
+            mape = calculate_mape(batch_targets, outputs)
             
             # Extract features, m, and tau
             features = batch_inputs[:, :-2]
@@ -174,6 +184,7 @@ def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_
             total_cal_penalty += cal_penalty.item()
             total_but_penalty += but_penalty.item()
             total_large_m_penalty += large_m_penalty.item()
+            total_mape += mape.item()
             num_batches += 1
         
         # Calculate averages
@@ -182,6 +193,7 @@ def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_
         avg_cal_penalty = total_cal_penalty / num_batches
         avg_but_penalty = total_but_penalty / num_batches
         avg_large_m_penalty = total_large_m_penalty / num_batches
+        avg_mape = total_mape / num_batches
         
         # Update learning rate
         scheduler.step(avg_loss)
@@ -191,14 +203,16 @@ def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_
                 f'Penalty = {avg_penalty:.6f} || '
                 f'Calendar Penalty = {avg_cal_penalty:.6f} || '
                 f'Butterfly Penalty = {avg_but_penalty:.6f} || '
-                f'Large Moneyness Penalty = {avg_large_m_penalty:.6f}')
+                f'Large Moneyness Penalty = {avg_large_m_penalty:.6f} || '
+                f'MAPE = {avg_mape:.6f}')
         wandb.log({
             'epoch': epoch,
             'loss': avg_loss,
             'penalty': avg_penalty,
             'calendar_penalty': avg_cal_penalty,
             'butterfly_penalty': avg_but_penalty,
-            'large_moneyness_penalty': avg_large_m_penalty
+            'large_moneyness_penalty': avg_large_m_penalty,
+            'mape': avg_mape
         })
 
 def main(features_path='../../data/processed/features_pca_iv23.csv', 
