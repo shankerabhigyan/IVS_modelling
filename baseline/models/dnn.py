@@ -4,7 +4,9 @@ import torch.optim as optim
 import pandas as pd
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
-
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
+import torch.distributed as dist
 class IVDataset(Dataset):
     def __init__(self, df, feature_cols):
         self.data = df          
@@ -223,6 +225,12 @@ def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2, verbose=True)
     mse_loss = nn.MSELoss()
     IC34, IC5 = create_penalty_grids()
+
+    if torch.cuda.device_count() > 1:
+        model = DDP(model, device_ids=[dist.get_rank()])
+    else:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        model.to(device)
     
     for epoch in range(num_epochs):
         total_loss = 0
@@ -232,8 +240,7 @@ def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_
         total_large_m_penalty = 0
         total_mape = 0
         num_batches = 0
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        model.to(device)
+        
         
         model.train()
         for batch_inputs, batch_targets in tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}"):
