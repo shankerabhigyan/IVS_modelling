@@ -303,6 +303,9 @@ def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_
             'mape': avg_mape
         })
 
+        # save model
+        torch.save(model.state_dict(), 'model.pth')
+
 def main(features_path='../../data/processed/features_pca_iv23.csv', 
          iv_path='../../data/processed/predicted_iv23.csv',
          batch_size=512,
