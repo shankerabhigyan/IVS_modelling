@@ -236,7 +236,7 @@ def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_
         model.to(device)
         
         model.train()
-        for batch_inputs, batch_targets in train_loader:
+        for batch_inputs, batch_targets in tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}"):
             optimizer.zero_grad()
             batch_inputs, batch_targets = batch_inputs.to(device), batch_targets.to(device)
             
@@ -333,5 +333,6 @@ def main(features_path='../../data/processed/features_pca_iv23.csv',
 
 if __name__ == "__main__":
     import wandb
+    from tqdm import tqdm
     wandb.init(project="ivs-dnn")
     model = main()
