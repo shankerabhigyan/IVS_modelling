@@ -51,7 +51,7 @@ dataset = IVDataset(df, feature_cols)
 print(dataset.get_input_size())
 
 from torch.utils.data import DataLoader
-train_loader = DataLoader(dataset, batch_size=32, shuffle=True)
+train_loader = DataLoader(dataset, batch_size=128, shuffle=True)
 dnn = IVSDNN(input_size=dataset.get_input_size(), hidden_size=256)
 
 import wandb

@@ -220,14 +220,19 @@ def calculate_mape(targets, outputs):
     return torch.mean(percentage_errors)
 
 def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_penalty=1.0, wandb=None):
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-5)  # Added weight decay
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2, verbose=True)
+    
     mse_loss = nn.MSELoss()
     IC34, IC5 = create_penalty_grids()
 
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model.to(device)
+
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-5)  # Added weight decay
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2, verbose=True)
+
     # In train_model, after model.to(device):
-    if torch.cuda.device_count() > 1:
-        model = nn.DataParallel(model)
+    # if torch.cuda.device_count() > 1:
+    #     model = nn.DataParallel(model)
         
     for epoch in range(num_epochs):
         total_loss = 0
@@ -237,8 +242,7 @@ def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_
         total_large_m_penalty = 0
         total_mape = 0
         num_batches = 0
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        # model.to(device)
+        
         
         model.train()
         for batch_inputs, batch_targets in tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}"):
