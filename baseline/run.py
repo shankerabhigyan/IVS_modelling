@@ -43,6 +43,7 @@ print(len(merged_df))
 
 # join the two dataframes using the date column so that we have the corresponding F1, F2, F3 values for each date
 df = pd.merge(merged_df, features, on='date')
+df = df[:30000]
 feature_cols = ['F1', 'F2', 'F3']
 from models.dnn import IVDataset, IVSDNN, train_model, large_moneyness_penalty, butterfly_arbitrage_penalty, calendar_spread_penalty, safe_divide
 
@@ -51,7 +52,7 @@ dataset = IVDataset(df, feature_cols)
 print(dataset.get_input_size())
 
 from torch.utils.data import DataLoader
-train_loader = DataLoader(dataset, batch_size=128, shuffle=True)
+train_loader = DataLoader(dataset, batch_size=200, shuffle=True)
 dnn = IVSDNN(input_size=dataset.get_input_size(), hidden_size=256)
 
 import wandb
