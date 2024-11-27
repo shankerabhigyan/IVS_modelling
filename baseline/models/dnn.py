@@ -223,6 +223,10 @@ def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_
     
     mse_loss = nn.MSELoss()
     IC34, IC5 = create_penalty_grids()
+    
+    #trim IC34 and IC5 for testing
+    IC34 = IC34[::3]
+    IC5 = IC5[::3] 
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     model.to(device)
