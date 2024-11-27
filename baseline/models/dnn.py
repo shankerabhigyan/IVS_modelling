@@ -216,7 +216,7 @@ def calculate_mape(targets, outputs):
     # Clip the ratio to prevent extreme values
     percentage_errors = torch.abs((targets - outputs) / (torch.abs(targets) + epsilon)) * 100
     # Optional: clip to reasonable range, e.g., [0, 1000]
-    percentage_errors = torch.clip(percentage_errors, 0, 1000)
+    #percentage_errors = torch.clip(percentage_errors, 0, 1000)
     return torch.mean(percentage_errors)
 
 def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_penalty=1.0, wandb=None):
@@ -274,7 +274,7 @@ def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_
             #loss = mse + penalty
             # using mape as loss to avoid arbitrage overfitting
             loss = mape/100 + penalty
-            
+
             # Backward pass with gradient clipping
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
