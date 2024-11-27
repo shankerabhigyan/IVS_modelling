@@ -271,7 +271,9 @@ def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_
             penalty = cal_penalty + but_penalty + large_m_penalty
             #penalty *= lambda_penalty * epoch_weight
             
-            loss = mse + penalty
+            #loss = mse + penalty
+            # using mape as loss to avoid arbitrage overfitting
+            loss = mape/100 + penalty
             
             # Backward pass with gradient clipping
             loss.backward()
