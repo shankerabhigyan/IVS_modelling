@@ -4,25 +4,23 @@ import torch
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 from models.lstm import CustomLSTMCell, CustomLSTMModel, ModelManager, DatasetManager
 
-lstm_model_path = "./ckpts/lstm1620_256.pth"
+lstm_model_path = "./ckpts/lstm_vae_1622_512.pth"
 #lstm_model_path = './ckpts/test_bilstm256.pth'
-lstm_model = CustomLSTMModel(input_dim=9, hidden_dim=256, output_dim=3)
+lstm_model = CustomLSTMModel(input_dim=48, hidden_dim=512, output_dim=16)
 lstm_model.load_model(model_path=lstm_model_path)
 
-features = pd.read_csv("../data/processed/features_pca_iv16-20.csv")
+features = pd.read_csv('../data/processed/vae/features_vae_iv16_22_16.csv')
 
+feature_cols = [f'feature_{i}' for i in range(16)]
 for i in range(22,len(features)):
-    ma1 = torch.tensor(features.iloc[i-1][['feature1', 'feature2', 'feature3']].astype(float).values, dtype=torch.float32)
-    ma5 = torch.tensor(features.iloc[i-5:i][['feature1', 'feature2', 'feature3']].mean(axis=0).values, dtype=torch.float32)
-    ma22 = torch.tensor(features.iloc[i-22:i][['feature1', 'feature2', 'feature3']].mean(axis=0).values, dtype=torch.float32)
-    feature = torch.cat((ma1, ma5, ma22), dim=0).to(device)
+    ma1 = torch.tensor(features.iloc[i-1][feature_cols].astype(float).values, dtype=torch.float32).to(device)
+    ma2 = torch.tensor(features.iloc[i-2][feature_cols].astype(float).values, dtype=torch.float32).to(device)
+    ma3 = torch.tensor(features.iloc[i-3][feature_cols].astype(float).values, dtype=torch.float32).to(device)
+    feature = torch.cat((ma1, ma2, ma3), dim=0).to(device)
     out = lstm_model.predict(feature)
-    for obj in out:
-        features.at[i, "F1"] = obj[0].item()
-        features.at[i, "F2"] = obj[1].item()
-        features.at[i, "F3"] = obj[2].item()
+    for j in range(16):
+        features.at[i, f'feature_{j}'] = out[0][j].item()
 
-        
 features = features.dropna().reset_index(drop=True)
 
 df_iv_path_list = [
@@ -30,7 +28,9 @@ df_iv_path_list = [
     "../data/processed/pca/predicted_iv17.csv",
     "../data/processed/pca/predicted_iv18.csv",
     "../data/processed/pca/predicted_iv19.csv",
-    "../data/processed/pca/predicted_iv20.csv"
+    "../data/processed/pca/predicted_iv20.csv",
+    "../data/processed/pca/predicted_iv21.csv",
+    "../data/processed/pca/predicted_iv22.csv"
 ]
 
 merged_df = pd.DataFrame()
@@ -41,20 +41,18 @@ for path in df_iv_path_list:
 merged_df = merged_df.reset_index(drop=True)
 print(len(merged_df))
 
-# join the two dataframes using the date column so that we have the corresponding F1, F2, F3 values for each date
 df = pd.merge(merged_df, features, on='date')
+
 df = df[:30000]
-feature_cols = ['F1', 'F2', 'F3']
+
 from models.dnn import IVDataset, IVSDNN, train_model, large_moneyness_penalty, butterfly_arbitrage_penalty, calendar_spread_penalty, safe_divide
 
 dataset = IVDataset(df, feature_cols)
 
-print(dataset.get_input_size())
-
 from torch.utils.data import DataLoader
-train_loader = DataLoader(dataset, batch_size=512, shuffle=True)
-dnn = IVSDNN(input_size=dataset.get_input_size(), hidden_size=256)
+train_loader = DataLoader(dataset, batch_size=256, shuffle=True)
+dnn = IVSDNN(input_size=dataset.get_input_size(), hidden_size=512)
 
 import wandb
-wandb.init(project="ivs-dnn")
+wandb.init(project="vae-dnn")
 train_model(dnn, train_loader, 100, 0.001, 1, wandb)

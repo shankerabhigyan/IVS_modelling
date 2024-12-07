@@ -225,8 +225,8 @@ def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_
     IC34, IC5 = create_penalty_grids()
     
     #trim IC34 and IC5 for testing
-    IC34 = IC34[::3]
-    IC5 = IC5[::3] 
+    IC34 = IC34[::4]
+    IC5 = IC5[::4] 
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     model.to(device)
@@ -282,21 +282,22 @@ def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_
             
             
             # Accumulate metrics
-            total_loss += loss.item()
-            total_penalty += penalty.item()
-            total_cal_penalty += cal_penalty.item()
-            total_but_penalty += but_penalty.item()
-            total_large_m_penalty += large_m_penalty.item()
-            total_mape += mape.item()
-            num_batches += 1
+            with torch.no_grad():
+                total_loss += loss
+                total_penalty += penalty
+                total_cal_penalty += cal_penalty
+                total_but_penalty += but_penalty
+                total_large_m_penalty += large_m_penalty
+                total_mape += mape
+                num_batches += 1
         
         # Calculate averages
-        avg_loss = total_loss / num_batches
-        avg_penalty = total_penalty / num_batches
-        avg_cal_penalty = total_cal_penalty / num_batches
-        avg_but_penalty = total_but_penalty / num_batches
-        avg_large_m_penalty = total_large_m_penalty / num_batches
-        avg_mape = total_mape / num_batches
+        avg_loss = total_loss.item() / num_batches
+        avg_penalty = total_penalty.item() / num_batches
+        avg_cal_penalty = total_cal_penalty.item() / num_batches
+        avg_but_penalty = total_but_penalty.item() / num_batches
+        avg_large_m_penalty = total_large_m_penalty.item() / num_batches
+        avg_mape = total_mape.item() / num_batches
         
         # Update learning rate
         scheduler.step(avg_loss)
