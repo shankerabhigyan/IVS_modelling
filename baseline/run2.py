@@ -49,14 +49,14 @@ dataset = NormalizedIVDataset(df, feature_cols)
 
 from torch.utils.data import DataLoader
 # Increase batch size for more stable training
-train_loader = DataLoader(dataset, batch_size=512, shuffle=True)
+train_loader = DataLoader(dataset, batch_size=256, shuffle=True)
 
 from models.dnn import IVSDNN, train_model
 
 # Adjust model architecture
 dnn = IVSDNN(
     input_size=dataset.get_input_size(),
-    hidden_size=256  # Reduced hidden size for initial stability
+    hidden_size=512 
 )
 
 # Initialize wandb

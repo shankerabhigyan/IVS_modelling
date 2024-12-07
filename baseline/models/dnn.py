@@ -285,24 +285,30 @@ def calculate_mape(targets, outputs):
     return torch.mean(percentage_errors)
 
 def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_penalty=1.0, wandb=None):
-    
     mse_loss = nn.MSELoss()
     IC34, IC5 = create_penalty_grids()
     
-    #trim IC34 and IC5 for testing
+    # Trim IC34 and IC5 for testing
     IC34 = IC34[::4]
     IC5 = IC5[::4] 
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     model.to(device)
 
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-5)  # Added weight decay
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2, verbose=True)
+    # Use AdamW instead of Adam for better weight decay handling
+    optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
+    
+    # More aggressive learning rate scheduling
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.3, patience=3, verbose=True,
+        min_lr=1e-6
+    )
 
-    # In train_model, after model.to(device):
-    # if torch.cuda.device_count() > 1:
-    #     model = nn.DataParallel(model)
-        
+    # Initialize penalty weights that will increase over time
+    penalty_weight = 0.0
+    target_penalty_weight = 1.0
+    warmup_epochs = 5
+
     for epoch in range(num_epochs):
         total_loss = 0
         total_penalty = 0
@@ -310,8 +316,14 @@ def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_
         total_but_penalty = 0
         total_large_m_penalty = 0
         total_mape = 0
+        total_mse = 0
         num_batches = 0
         
+        # Gradually increase penalty weight
+        if epoch < warmup_epochs:
+            penalty_weight = (epoch + 1) * target_penalty_weight / warmup_epochs
+        else:
+            penalty_weight = target_penalty_weight
         
         model.train()
         for batch_inputs, batch_targets in tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}"):
@@ -321,6 +333,7 @@ def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_
             # Forward pass
             outputs = model(batch_inputs)
 
+            # Calculate MSE and MAPE
             mse = mse_loss(outputs, batch_targets)
             mape = calculate_mape(batch_targets, outputs)
             
@@ -329,63 +342,88 @@ def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_
             m = batch_inputs[:, -2].reshape(-1, 1)
             tau = batch_inputs[:, -1].reshape(-1, 1)
             
-            # Calculate penalties with smaller weights initially
-            epoch_weight = min(1.0, (epoch + 1) / 5)  # Gradually increase penalty weight
+            # Calculate penalties
+            cal_penalty, but_penalty, large_m_penalty = compute_total_penalty(
+                model, features, m, tau, IC34, IC5
+            )
             
-            cal_penalty, but_penalty, large_m_penalty = compute_total_penalty(model, features, m, tau, IC34, IC5)
-            penalty = cal_penalty + but_penalty + large_m_penalty
-            #penalty *= lambda_penalty * epoch_weight
+            # Combine penalties with weights
+            total_penalty_term = (
+                0.2 * cal_penalty + 
+                0.3 * but_penalty + 
+                0.5 * large_m_penalty
+            ) * penalty_weight
             
-            #loss = mse + penalty
-            # using mape as loss to avoid arbitrage overfitting
-            loss = mape/100 + penalty
+            # Combined loss with MSE and MAPE
+            loss = (
+                0.4 * mse +  # MSE term
+                0.4 * (mape / 100) +  # Normalized MAPE term
+                0.2 * total_penalty_term  # Weighted penalty term
+            )
 
             # Backward pass with gradient clipping
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
             
+            # Log gradient norms for debugging
+            if epoch == 0 and num_batches == 0:
+                total_grad_norm = 0
+                for p in model.parameters():
+                    if p.grad is not None:
+                        param_norm = p.grad.data.norm(2)
+                        total_grad_norm += param_norm.item() ** 2
+                total_grad_norm = total_grad_norm ** 0.5
+                print(f'Initial gradient norm: {total_grad_norm}')
+            
+            optimizer.step()
             
             # Accumulate metrics
             with torch.no_grad():
-                total_loss += loss
-                total_penalty += penalty
-                total_cal_penalty += cal_penalty
-                total_but_penalty += but_penalty
-                total_large_m_penalty += large_m_penalty
-                total_mape += mape
+                total_loss += loss.item()
+                total_penalty += total_penalty_term.item()
+                total_cal_penalty += cal_penalty.item()
+                total_but_penalty += but_penalty.item()
+                total_large_m_penalty += large_m_penalty.item()
+                total_mape += mape.item()
+                total_mse += mse.item()
                 num_batches += 1
         
         # Calculate averages
-        avg_loss = total_loss.item() / num_batches
-        avg_penalty = total_penalty.item() / num_batches
-        avg_cal_penalty = total_cal_penalty.item() / num_batches
-        avg_but_penalty = total_but_penalty.item() / num_batches
-        avg_large_m_penalty = total_large_m_penalty.item() / num_batches
-        avg_mape = total_mape.item() / num_batches
+        metrics = {
+            'loss': total_loss / num_batches,
+            'mse': total_mse / num_batches,
+            'mape': total_mape / num_batches,
+            'penalty': total_penalty / num_batches,
+            'calendar_penalty': total_cal_penalty / num_batches,
+            'butterfly_penalty': total_but_penalty / num_batches,
+            'large_moneyness_penalty': total_large_m_penalty / num_batches,
+            'learning_rate': optimizer.param_groups[0]['lr'],
+            'penalty_weight': penalty_weight
+        }
         
-        # Update learning rate
-        scheduler.step(avg_loss)
+        # Update learning rate based on MSE instead of combined loss
+        scheduler.step(metrics['mse'])
         
+        # Print metrics
+        print(f'Epoch {epoch+1} || '
+              f'Loss = {metrics["loss"]:.6f} || '
+              f'MSE = {metrics["mse"]:.6f} || '
+              f'MAPE = {metrics["mape"]:.6f} || '
+              f'Penalty = {metrics["penalty"]:.6f} || '
+              f'Calendar Penalty = {metrics["calendar_penalty"]:.6f} || '
+              f'Butterfly Penalty = {metrics["butterfly_penalty"]:.6f} || '
+              f'Large Moneyness Penalty = {metrics["large_moneyness_penalty"]:.6f} || '
+              f'LR = {metrics["learning_rate"]:.6f}')
         
-        print(f'Epoch {epoch+1} || Loss = {avg_loss:.6f} || '
-                f'Penalty = {avg_penalty:.6f} || '
-                f'Calendar Penalty = {avg_cal_penalty:.6f} || '
-                f'Butterfly Penalty = {avg_but_penalty:.6f} || '
-                f'Large Moneyness Penalty = {avg_large_m_penalty:.6f} || '
-                f'MAPE = {avg_mape:.6f}')
-        wandb.log({
-            'epoch': epoch,
-            'loss': avg_loss,
-            'penalty': avg_penalty,
-            'calendar_penalty': avg_cal_penalty,
-            'butterfly_penalty': avg_but_penalty,
-            'large_moneyness_penalty': avg_large_m_penalty,
-            'mape': avg_mape
-        })
+        if wandb:
+            wandb.log(metrics)
 
-        # save model
-        torch.save(model.state_dict(), 'model.pth')
+        # Save model if it's the best so far
+        if epoch == 0 or metrics['mse'] < best_mse:
+            best_mse = metrics['mse']
+            torch.save(model.state_dict(), 'best_model.pth')
+
+    return model
 
 def main(features_path='../../data/processed/features_pca_iv23.csv', 
          iv_path='../../data/processed/predicted_iv23.csv',
