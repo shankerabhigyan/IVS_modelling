@@ -5,7 +5,6 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 from models.lstm import CustomLSTMCell, CustomLSTMModel, ModelManager, DatasetManager
 
 lstm_model_path = "./ckpts/lstm_vae_1622_512.pth"
-#lstm_model_path = './ckpts/test_bilstm256.pth'
 lstm_model = CustomLSTMModel(input_dim=48, hidden_dim=512, output_dim=16)
 lstm_model.load_model(model_path=lstm_model_path)
 
@@ -39,20 +38,42 @@ for path in df_iv_path_list:
     merged_df = pd.concat([merged_df, df], axis=0)
 
 merged_df = merged_df.reset_index(drop=True)
-print(len(merged_df))
+print(f"Total samples: {len(merged_df)}")
 
 df = pd.merge(merged_df, features, on='date')
-
 df = df[:30000]
 
-from models.dnn import IVDataset, IVSDNN, train_model, large_moneyness_penalty, butterfly_arbitrage_penalty, calendar_spread_penalty, safe_divide
-
-dataset = IVDataset(df, feature_cols)
+# Import the normalized dataset
+from models.dnn import NormalizedIVDataset
+dataset = NormalizedIVDataset(df, feature_cols)
 
 from torch.utils.data import DataLoader
-train_loader = DataLoader(dataset, batch_size=256, shuffle=True)
-dnn = IVSDNN(input_size=dataset.get_input_size(), hidden_size=512)
+# Increase batch size for more stable training
+train_loader = DataLoader(dataset, batch_size=512, shuffle=True)
 
+from models.dnn import IVSDNN, train_model
+
+# Adjust model architecture
+dnn = IVSDNN(
+    input_size=dataset.get_input_size(),
+    hidden_size=256  # Reduced hidden size for initial stability
+)
+
+# Initialize wandb
 import wandb
-wandb.init(project="vae-dnn")
-train_model(dnn, train_loader, 100, 0.001, 1, wandb)
+wandb.init(project="vae-dnn", config={
+    "hidden_size": 256,
+    "batch_size": 512,
+    "learning_rate": 0.001,
+    "num_epochs": 100
+})
+
+# Train with modified hyperparameters
+train_model(
+    model=dnn,
+    train_loader=train_loader,
+    num_epochs=100,
+    learning_rate=0.001,
+    lambda_penalty=1.0,
+    wandb=wandb
+)

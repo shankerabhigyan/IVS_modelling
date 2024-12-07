@@ -39,6 +39,71 @@ class IVDataset(Dataset):
     def get_input_size(self):
         return len(self.feature_cols) + 2
 
+
+class NormalizedIVDataset(Dataset):
+    def __init__(self, df, feature_cols):
+        self.data = df          
+        self.feature_cols = feature_cols
+        
+        # Normalize features
+        self.feature_means = df[feature_cols].mean()
+        self.feature_stds = df[feature_cols].std()
+        normalized_features = (df[feature_cols] - self.feature_means) / self.feature_stds
+        
+        # Convert to tensors
+        self.features = torch.tensor(normalized_features.values, dtype=torch.float32)
+        self.m = torch.tensor(self.data['m'].values, dtype=torch.float32).reshape(-1, 1)
+        self.tau = torch.tensor(self.data['tau'].values, dtype=torch.float32).reshape(-1, 1)
+        self.iv = torch.tensor(self.data['IV'].values, dtype=torch.float32).reshape(-1, 1)
+        
+        print("\nFeature Statistics after normalization:")
+        for i, col in enumerate(feature_cols):
+            print(f"{col}:")
+            print(f"Mean: {self.features[:, i].mean().item():.6f}")
+            print(f"Std: {self.features[:, i].std().item():.6f}")
+            print(f"Min: {self.features[:, i].min().item():.6f}")
+            print(f"Max: {self.features[:, i].max().item():.6f}")
+            print()
+        
+        print("\nMoneyness Statistics:")
+        print(f"Mean: {self.m.mean().item():.6f}")
+        print(f"Std: {self.m.std().item():.6f}")
+        print(f"Min: {self.m.min().item():.6f}")
+        print(f"Max: {self.m.max().item():.6f}")
+        
+        print("\nTau Statistics:")
+        print(f"Mean: {self.tau.mean().item():.6f}")
+        print(f"Std: {self.tau.std().item():.6f}")
+        print(f"Min: {self.tau.min().item():.6f}")
+        print(f"Max: {self.tau.max().item():.6f}")
+        
+        print("\nIV Statistics:")
+        print(f"Mean: {self.iv.mean().item():.6f}")
+        print(f"Std: {self.iv.std().item():.6f}")
+        print(f"Min: {self.iv.min().item():.6f}")
+        print(f"Max: {self.iv.max().item():.6f}")
+        
+        # Verify no NaN values
+        print("\nChecking for NaN values:")
+        print(f"Features NaN: {torch.isnan(self.features).any()}")
+        print(f"m NaN: {torch.isnan(self.m).any()}")
+        print(f"tau NaN: {torch.isnan(self.tau).any()}")
+        print(f"iv NaN: {torch.isnan(self.iv).any()}")
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        input_tensor = torch.cat([self.features[idx], self.m[idx], self.tau[idx]], dim=0)
+        return input_tensor, self.iv[idx]
+    
+    def get_input_size(self):
+        return len(self.feature_cols) + 2  # features + m + tau
+    
+    def normalize_new_features(self, features):
+        """Normalize new features using stored mean and std"""
+        return (features - self.feature_means) / self.feature_stds
+
 class IVSDNN(nn.Module):
     def __init__(self, input_size, hidden_size=50):
         super(IVSDNN, self).__init__()
