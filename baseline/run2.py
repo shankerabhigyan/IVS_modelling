@@ -42,14 +42,17 @@ print(f"Total samples: {len(merged_df)}")
 
 df = pd.merge(merged_df, features, on='date')
 df = df[:30000]
+df_val = df[:-10000]
 
 # Import the normalized dataset
 from models.dnn import NormalizedIVDataset
 dataset = NormalizedIVDataset(df, feature_cols)
+val_dataset = NormalizedIVDataset(df_val,feature_cols)
 
 from torch.utils.data import DataLoader
 # Increase batch size for more stable training
 train_loader = DataLoader(dataset, batch_size=256, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=256, shuffle=True)
 
 from models.dnn import IVSDNN, train_model
 
@@ -72,6 +75,7 @@ wandb.init(project="vae-dnn", config={
 train_model(
     model=dnn,
     train_loader=train_loader,
+    val_loader=val_loader,
     num_epochs=100,
     learning_rate=0.001,
     lambda_penalty=1.0,

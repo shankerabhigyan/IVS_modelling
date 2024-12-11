@@ -284,7 +284,7 @@ def calculate_mape(targets, outputs):
     #percentage_errors = torch.clip(percentage_errors, 0, 1000)
     return torch.mean(percentage_errors)
 
-def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_penalty=1.0, wandb=None):
+def train_model(model, train_loader, val_loader, num_epochs=20, learning_rate=0.001, lambda_penalty=1.0, wandb=None):
     mse_loss = nn.MSELoss()
     IC34, IC5 = create_penalty_grids()
     
@@ -298,7 +298,7 @@ def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_
     # Use AdamW instead of Adam for better weight decay handling
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
     
-    # More aggressive learning rate scheduling
+    # More aggressive learning rate scheduling based on validation loss
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', factor=0.3, patience=3, verbose=True,
         min_lr=1e-6
@@ -308,16 +308,19 @@ def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_
     penalty_weight = 0.0
     target_penalty_weight = 1.0
     warmup_epochs = 5
+    
+    best_val_loss = float('inf')
+    best_model_state = None
 
     for epoch in range(num_epochs):
-        total_loss = 0
-        total_penalty = 0
-        total_cal_penalty = 0
-        total_but_penalty = 0
-        total_large_m_penalty = 0
-        total_mape = 0
-        total_mse = 0
-        num_batches = 0
+        # Training phase
+        model.train()
+        train_metrics = {
+            'loss': 0, 'mse': 0, 'mape': 0, 'penalty': 0,
+            'calendar_penalty': 0, 'butterfly_penalty': 0,
+            'large_moneyness_penalty': 0
+        }
+        num_train_batches = 0
         
         # Gradually increase penalty weight
         if epoch < warmup_epochs:
@@ -325,8 +328,7 @@ def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_
         else:
             penalty_weight = target_penalty_weight
         
-        model.train()
-        for batch_inputs, batch_targets in tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}"):
+        for batch_inputs, batch_targets in tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} - Training"):
             optimizer.zero_grad()
             batch_inputs, batch_targets = batch_inputs.to(device), batch_targets.to(device)
             
@@ -365,64 +367,101 @@ def train_model(model, train_loader, num_epochs=20, learning_rate=0.001, lambda_
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
             
-            # Log gradient norms for debugging
-            if epoch == 0 and num_batches == 0:
-                total_grad_norm = 0
-                for p in model.parameters():
-                    if p.grad is not None:
-                        param_norm = p.grad.data.norm(2)
-                        total_grad_norm += param_norm.item() ** 2
-                total_grad_norm = total_grad_norm ** 0.5
-                print(f'Initial gradient norm: {total_grad_norm}')
-            
             optimizer.step()
             
-            # Accumulate metrics
-            with torch.no_grad():
-                total_loss += loss.item()
-                total_penalty += total_penalty_term.item()
-                total_cal_penalty += cal_penalty.item()
-                total_but_penalty += but_penalty.item()
-                total_large_m_penalty += large_m_penalty.item()
-                total_mape += mape.item()
-                total_mse += mse.item()
-                num_batches += 1
-        
-        # Calculate averages
-        metrics = {
-            'loss': total_loss / num_batches,
-            'mse': total_mse / num_batches,
-            'mape': total_mape / num_batches,
-            'penalty': total_penalty / num_batches,
-            'calendar_penalty': total_cal_penalty / num_batches,
-            'butterfly_penalty': total_but_penalty / num_batches,
-            'large_moneyness_penalty': total_large_m_penalty / num_batches,
-            'learning_rate': optimizer.param_groups[0]['lr'],
-            'penalty_weight': penalty_weight
+            # Accumulate training metrics
+            train_metrics['loss'] += loss.item()
+            train_metrics['mse'] += mse.item()
+            train_metrics['mape'] += mape.item()
+            train_metrics['penalty'] += total_penalty_term.item()
+            train_metrics['calendar_penalty'] += cal_penalty.item()
+            train_metrics['butterfly_penalty'] += but_penalty.item()
+            train_metrics['large_moneyness_penalty'] += large_m_penalty.item()
+            num_train_batches += 1
+
+        # Validation phase
+        model.eval()
+        val_metrics = {
+            'loss': 0, 'mse': 0, 'mape': 0, 'penalty': 0,
+            'calendar_penalty': 0, 'butterfly_penalty': 0,
+            'large_moneyness_penalty': 0
         }
+        num_val_batches = 0
+
+        with torch.no_grad():
+            for batch_inputs, batch_targets in tqdm(val_loader, desc=f"Epoch {epoch+1}/{num_epochs} - Validation"):
+                batch_inputs, batch_targets = batch_inputs.to(device), batch_targets.to(device)
+                
+                outputs = model(batch_inputs)
+                mse = mse_loss(outputs, batch_targets)
+                mape = calculate_mape(batch_targets, outputs)
+                
+                features = batch_inputs[:, :-2]
+                m = batch_inputs[:, -2].reshape(-1, 1)
+                tau = batch_inputs[:, -1].reshape(-1, 1)
+                
+                cal_penalty, but_penalty, large_m_penalty = compute_total_penalty(
+                    model, features, m, tau, IC34, IC5
+                )
+                
+                total_penalty_term = (
+                    0.2 * cal_penalty + 
+                    0.3 * but_penalty + 
+                    0.5 * large_m_penalty
+                ) * penalty_weight
+                
+                loss = (
+                    0.4 * mse +
+                    0.4 * (mape / 100) +
+                    0.2 * total_penalty_term
+                )
+                
+                val_metrics['loss'] += loss.item()
+                val_metrics['mse'] += mse.item()
+                val_metrics['mape'] += mape.item()
+                val_metrics['penalty'] += total_penalty_term.item()
+                val_metrics['calendar_penalty'] += cal_penalty.item()
+                val_metrics['butterfly_penalty'] += but_penalty.item()
+                val_metrics['large_moneyness_penalty'] += large_m_penalty.item()
+                num_val_batches += 1
+
+        # Calculate average metrics
+        for metric in train_metrics:
+            train_metrics[metric] /= num_train_batches
+            val_metrics[metric] /= num_val_batches
+
+        # Update learning rate based on validation MSE
+        scheduler.step(val_metrics['mse'])
         
-        # Update learning rate based on MSE instead of combined loss
-        scheduler.step(metrics['mse'])
+        # Save best model
+        if val_metrics['loss'] < best_val_loss:
+            best_val_loss = val_metrics['loss']
+            best_model_state = model.state_dict().copy()
+            torch.save(best_model_state, 'best_model.pth')
+        
+        # Prepare metrics for logging
+        log_metrics = {
+            'train_' + k: v for k, v in train_metrics.items()
+        }
+        log_metrics.update({
+            'val_' + k: v for k, v in val_metrics.items()
+        })
+        log_metrics['learning_rate'] = optimizer.param_groups[0]['lr']
+        log_metrics['penalty_weight'] = penalty_weight
         
         # Print metrics
-        print(f'Epoch {epoch+1} || '
-              f'Loss = {metrics["loss"]:.6f} || '
-              f'MSE = {metrics["mse"]:.6f} || '
-              f'MAPE = {metrics["mape"]:.6f} || '
-              f'Penalty = {metrics["penalty"]:.6f} || '
-              f'Calendar Penalty = {metrics["calendar_penalty"]:.6f} || '
-              f'Butterfly Penalty = {metrics["butterfly_penalty"]:.6f} || '
-              f'Large Moneyness Penalty = {metrics["large_moneyness_penalty"]:.6f} || '
-              f'LR = {metrics["learning_rate"]:.6f}')
+        print(f"\nEpoch {epoch+1} Results:")
+        print(f"Training || Loss: {train_metrics['loss']:.6f} | MSE: {train_metrics['mse']:.6f} | "
+              f"MAPE: {train_metrics['mape']:.6f} | Penalty: {train_metrics['penalty']:.6f}")
+        print(f"Validation || Loss: {val_metrics['loss']:.6f} | MSE: {val_metrics['mse']:.6f} | "
+              f"MAPE: {val_metrics['mape']:.6f} | Penalty: {val_metrics['penalty']:.6f}")
+        print(f"Learning Rate: {log_metrics['learning_rate']:.6f}")
         
         if wandb:
-            wandb.log(metrics)
+            wandb.log(log_metrics)
 
-        # Save model if it's the best so far
-        if epoch == 0 or metrics['mse'] < best_mse:
-            best_mse = metrics['mse']
-            torch.save(model.state_dict(), 'best_model.pth')
-
+    # Load best model before returning
+    model.load_state_dict(best_model_state)
     return model
 
 def main(features_path='../../data/processed/features_pca_iv23.csv', 
