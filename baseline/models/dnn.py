@@ -110,35 +110,23 @@ class IVSDNN(nn.Module):
         self.input_size = input_size
         self.feature_size = input_size - 2
         
-        self.layer1 = nn.Sequential(
+        self.net = nn.Sequential(
             nn.Linear(input_size, hidden_size),
             nn.BatchNorm1d(hidden_size),
             nn.ReLU(),
-            nn.Dropout(0.2)
-        )
-        
-        self.layer2 = nn.Sequential(
+            nn.Dropout(0.1),  # Add dropout for regularization
             nn.Linear(hidden_size, hidden_size),
             nn.BatchNorm1d(hidden_size),
             nn.ReLU(),
-            nn.Dropout(0.2)
-        )
-        
-        self.layer3 = nn.Sequential(
+            nn.Dropout(0.1),
             nn.Linear(hidden_size, hidden_size),
             nn.BatchNorm1d(hidden_size),
             nn.ReLU(),
-            nn.Dropout(0.2)
-        )
-        
-        self.output = nn.Sequential(
+            nn.Dropout(0.1),
             nn.Linear(hidden_size, 1),
             nn.Softplus()
         )
         
-        self._initialize_weights()
-        
-    def _initialize_weights(self):
         # xavier initialisation with smaller bounds
         for m in self.net.modules():
             if isinstance(m, nn.Linear):
@@ -147,10 +135,7 @@ class IVSDNN(nn.Module):
                     nn.init.zeros_(m.bias)
 
     def forward(self, x):
-        h1 = self.layer1(x)
-        h2 = self.layer2(h1) + h1  # Residual connection
-        h3 = self.layer3(h2) + h2  # Residual connection
-        return self.output(h3)
+        return self.net(x)
     
     def predict_iv(self, features, m, tau):
         x = torch.cat([features.expand(m.shape[0], -1), m, tau], dim=1)
