@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
+from typing import List, Union
 
 class IVDataset(Dataset):
     def __init__(self, df, feature_cols):
@@ -283,6 +284,141 @@ def calculate_mape(targets, outputs):
     # Optional: clip to reasonable range, e.g., [0, 1000]
     #percentage_errors = torch.clip(percentage_errors, 0, 1000)
     return torch.mean(percentage_errors)
+
+# GRADIENT NORMALIZATION LOSS (GradNorm)
+## pushes the task-specific gradients towards a common training rate
+class GradNormLoss(nn.Module):
+    def __init__(self, num_tasks: int, alpha: float = 1.5):
+        """Initialize GradNorm loss module.
+        
+        Args:
+            num_tasks: Number of tasks for multi-task learning
+            alpha: Strength of restoring force to push tasks to a common training rate
+        """
+        super(GradNormLoss, self).__init__()
+        if num_tasks < 1:
+            raise ValueError("Number of tasks must be positive")
+        if alpha <= 0:
+            raise ValueError("Alpha must be positive")
+            
+        self.num_tasks = num_tasks
+        self.alpha = alpha
+        # Initialize weights with proper shape and device handling
+        self.w = nn.Parameter(torch.ones(num_tasks))
+        self.l1_loss = nn.L1Loss(reduction='none')
+        self.L_0 = None
+        
+        # Additional state tracking
+        self.GW_t = None
+        self.bar_GW_t = None
+        self.tilde_L_t = None
+        self.r_t = None
+        self.wL_t = None
+        
+    def forward(self, L_t: torch.Tensor) -> torch.Tensor:
+        """Compute weighted loss for all tasks.
+        
+        Args:
+            L_t: Tensor of current losses for each task [num_tasks]
+        
+        Returns:
+            Total weighted loss
+        """
+        if L_t.size(0) != self.num_tasks:
+            raise ValueError(f"Expected {self.num_tasks} losses, got {L_t.size(0)}")
+            
+        # Store initial losses if not already stored
+        if self.L_0 is None:
+            self.L_0 = L_t.detach().clone()
+        
+        # Ensure L_t is on same device as weights
+        L_t = L_t.to(self.w.device)
+        
+        # Compute weighted losses
+        self.wL_t = L_t * self.w
+        total_loss = self.wL_t.sum()
+        
+        return total_loss
+
+    def compute_grad_norms(self, 
+                          shared_params: Union[List[nn.Parameter], nn.Module]) -> torch.Tensor:
+        """Compute gradient norms for each task with respect to shared parameters.
+        
+        Args:
+            shared_params: Parameters or module to compute gradients with respect to
+        
+        Returns:
+            Tensor of gradient norms for each task
+        """
+        if isinstance(shared_params, nn.Module):
+            params = list(shared_params.parameters())
+        else:
+            params = shared_params
+            
+        grad_norms = []
+        for i in range(self.num_tasks):
+            grads = torch.autograd.grad(
+                self.wL_t[i],
+                params,
+                retain_graph=True,
+                create_graph=True
+            )
+            # Compute the L2 norm of the gradients
+            grad_norm = torch.sqrt(sum(torch.sum(g * g) for g in grads))
+            grad_norms.append(grad_norm)
+            
+        return torch.stack(grad_norms)
+
+    def adjust_weights(self, 
+                      grad_norm_weights: nn.Module,
+                      optimizer: optim.Optimizer,
+                      L_t: torch.Tensor) -> None:
+        """Adjust task weights using GradNorm algorithm.
+        
+        Args:
+            grad_norm_weights: Module containing shared parameters
+            optimizer: Optimizer for updating task weights
+            L_t: Current task losses
+        """
+        # Compute gradient norms
+        self.GW_t = self.compute_grad_norms(grad_norm_weights)
+        
+        # Calculate mean gradient norm
+        self.bar_GW_t = self.GW_t.mean().detach()
+        
+        # Compute relative inverse training rates
+        self.tilde_L_t = (L_t / self.L_0).detach()
+        self.r_t = self.tilde_L_t / self.tilde_L_t.mean()
+        
+        # Calculate target gradient norms
+        target_gn = self.bar_GW_t * (self.r_t ** self.alpha)
+        
+        # Compute GradNorm loss
+        grad_norm_loss = self.l1_loss(self.GW_t, target_gn).sum()
+        
+        # Compute gradients for task weights
+        optimizer.zero_grad()
+        grad_norm_loss.backward()
+        optimizer.step()
+        
+        # Re-normalize weights
+        with torch.no_grad():
+            self.w.data = self.num_tasks * self.w.data / self.w.data.sum()
+        
+        # Clear intermediate computations
+        self.GW_t = None
+        self.bar_GW_t = None
+        self.tilde_L_t = None
+        self.r_t = None
+        self.wL_t = None
+
+    def get_weights(self) -> torch.Tensor:
+        """Get current task weights.
+        
+        Returns:
+            Tensor of task weights
+        """
+        return self.w.data.clone()
 
 def train_model(model, train_loader, val_loader, num_epochs=20, learning_rate=0.001, lambda_penalty=1.0, wandb=None):
     mse_loss = nn.MSELoss()
